@@ -1,8 +1,6 @@
 # Note: Lupe's Cleaning booking agent
 
-**Agent:** YOUR-AGENT-LINK
-**API:** https://YOUR-APP.vercel.app (spec at `/openapi.json`)
-**Code:** YOUR-GITHUB-LINK
+Links to the published agent and the live API are in my application email. The API's OpenAPI spec is served at `/openapi.json`.
 
 ## The business
 
@@ -52,16 +50,16 @@ The split is deliberate. The model does what it's good at: understanding what th
 
 ## Where I hit the platform's limits
 
-FILL THIS IN WHILE BUILDING. For each item: what you needed, what happened, how you'd build it.
+I connected the API by describing it to the Builder in plain language (base URL, endpoints, parameters, example bodies). That worked: the agent called the quote endpoint and returned the exact interpolated price (move-out, 1,200 sq ft, $366), which confirms it used the API rather than guessing. These are the places I wanted more control:
 
-Things to check and note as you build:
-- **Auth for custom APIs:** can you send an API key header, or only open URLs? (I made the key optional for this reason.)
-- **Request formats:** does the tool builder support POST with a JSON body and nested arrays, or only GET query params? (The API supports both for quotes.)
-- **Passing data between tools:** can the agent reliably reuse `estimatedTeamHours` from the quote in the availability call?
-- **Structured UI:** can you render service cards, a quote breakdown or slot buttons, or is it text only?
-- **Payments:** is there a native Stripe or checkout step?
-- **Async events:** can the API push an update back into a conversation (e.g. "the office confirmed your booking")?
-- **Testing:** is there a way to run test conversations automatically?
+1. **Tool definitions are generated, not declared.** The Builder turns my description into actions, but I couldn't find a place to review or edit the exact tool schema it produced (method, params, which response fields it reads), or to import the OpenAPI spec directly. For an engineer that makes changes hard to review, diff and version. *How I'd build it:* an "API actions" panel that accepts an OpenAPI URL, shows each generated operation as an editable schema, and stores it in version control alongside the agent's instructions.
 
-Example of how to write one:
-> **Slot buttons.** I wanted open slots shown as tappable buttons. The agent could only return text, so customers have to type "Tuesday morning". On the platform side I'd let a tool response include a `choices` array that the chat UI renders as quick replies, and send the selected value back as the next user message.
+2. **No test suite.** Testing is manual chats in Preview, and one conversation's state carries into the next question. In my run, an earlier out-of-area zip (78701) stayed in context and blocked the later "check my booking" test, which is correct agent behavior but makes regression testing slow and noisy. *How I'd build it:* saved test scenarios (scripted user turns + assertions like "called getQuote", "total equals tool output", "never states a price without a tool call"), each run in a fresh session, re-run on every publish.
+
+3. **Secrets for custom APIs.** My API supports an API key, but I left it open because the only configuration surface was the Builder chat, and pasting a secret into a conversation isn't acceptable for production. *How I'd build it:* a per-agent secret store, referenced from tool definitions (`{{secrets.LUPES_API_KEY}}`) and injected server-side, never shown to the model.
+
+4. **Tool-call observability (this one bit me).** In my first end-to-end test, quoting and availability worked, but the booking call came back without a reference and the agent (correctly) refused to retry and risk a duplicate. From the platform side I couldn't see the request the agent actually sent, so I couldn't tell whether it was the method, the body encoding, or the field names. I fixed it defensively on my side: the booking endpoint now accepts JSON, double-encoded JSON, form bodies and query params, unwraps common envelopes (`body`, `input`, `arguments`), maps snake_case and natural-language values ("Deep Cleaning", "Morning (7-9 AM)", "Tuesday, November 10, 2026"), logs only the *keys* of rejected payloads (never customer data), and also accepts GET as a fallback for tool runners that only issue GETs reliably. In production I'd keep POST-only plus an idempotency key, and the platform should make this unnecessary. When a quote looks wrong, I want to see the exact request the agent sent and the response it got. My API logs every call with a request id, but the platform side should show it too. *How I'd build it:* a per-conversation trace view listing each tool call with inputs, outputs, latency and errors, linked from the chat history.
+
+5. **No way to push events back into a conversation.** If the office confirms an edge-of-area booking or a crew cancels, the API can't notify the customer through the agent. *How I'd build it:* a signed webhook endpoint per agent that appends a system event to the conversation and can trigger a follow-up message or notification.
+
+6. **Payments mid-flow.** Lupe's requires a card to hold online bookings. The integration catalog includes Stripe, but a card-on-file step tied to my own booking API needs a custom checkout handoff. *How I'd build it:* my API returns a Stripe SetupIntent client secret with the booking, and the agent renders Agentplace's payment component with it, then confirms the booking on the success webhook.
